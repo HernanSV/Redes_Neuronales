@@ -1,0 +1,391 @@
+---
+title: "Comparación de modelos estadísticos y de redes neuronales interpretables 
+        en clasificación binaria"
+author: 
+- Hernán Supelano Vega
+- hsupelanov@unal.edu.co
+date: "Mayo 18 de 2026"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: cerulean
+    highlight: kate
+    mathjax: "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"
+
+header-includes:
+  - |
+    <style>
+    body {
+      text-align: justify;
+    }
+    </style>
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo=FALSE}
+# Carpeta
+setwd("C:\\Users\\herna\\OneDrive\\Escritorio\\Maestria\\Redes Neuronales\\Proyecto")
+```
+
+# Datos y objetivos
+
+Los datos tomados de https://www.kaggle.com/datasets/wenruliu/adult-income-dataset contienen información acerca de los ingresos anuales de una persona (1: mayores a 50K anuales, 0: menores o iguales a 50K) y también información referente a su *edad*, *género*, *nivel educativo*, *educación*, etc.
+
+Se ajustarán dos modelos estadísticos a este conjunto de datos (**GLM** y **GAM**) y dos modelos de redes neuronales (**MLP** y **NAM**). Se compararán los modelos de acuerdo a las métricas de *accuracy* y *AUC (área bajo la curva ROC)*, y además, se intentará de dar una interpretación a los resultados que arroje el análisis.
+
+# Análisis descriptivo
+
+```{r}
+# Datos
+
+library(readr)
+adult <- read_csv("adult.csv", show_col_types = FALSE)
+
+# Encabezado
+head(adult[, c(1:6)])
+```
+
+```{r}
+# Nombres de las columnas
+colnames(adult) <- c("age", "workclass", "fnlwgt", "education", "education_num", 
+                    "marital_status", "occupation", "relationship", "race",
+                    "sex", "capital_gain", "capital_loss", "hours_per_week", 
+                    "native_country", "Ingreso")
+
+# Tamaño del dataset
+dim(adult)
+```
+
+```{r}
+# Respuesta: porcentaje
+round(table(adult$Ingreso)/nrow(adult), 3)
+```
+
+```{r}
+# Grafico
+library(ggplot2)
+
+ggplot(adult, aes(x = age, y = education_num, color = factor(Ingreso))) +
+  geom_point(alpha = 0.7, size = 2) +
+  scale_color_manual(values = c("<=50K" = "lightcoral", ">50K" = "skyblue"),
+                     name = "Ingreso") +
+  labs(x = "Edad",
+       y = "Años de educación",
+       title = "Relación entre edad y años de educación \n por nivel de ingresos") +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(hjust = 0.5, size = 14),
+        legend.title = element_text(face = "bold"))
+```
+
+**Matriz de correlación**
+
+```{r, warning=FALSE, message=FALSE}
+# Correlación: variables numericas
+corr_matrix <- cor(adult[, c("age", "fnlwgt", "education_num", "capital_gain",
+                             "capital_loss", "hours_per_week")])
+
+library(corrplot)
+
+corrplot(corr_matrix, method = "color", order = "hclust", 
+         tl.cex = 0.6, tl.col = "black", addCoef.col = NULL)
+```
+
+# Prepocesamiento de los datos
+
+```{r}
+# Tipos de variables
+str(adult, give.attr = F)
+```
+
+```{r}
+# Llevar categoricas a binarias
+library(fastDummies)
+
+columnas_categoricas <- c("workclass", "education", "marital_status", 
+                          "occupation", "relationship", "race", "sex", 
+                          "native_country")
+
+# Aplicamos One-Hot Encoding y eliminamos las columnas originales
+adult_OHE <- dummy_cols(adult, 
+                        select_columns = columnas_categoricas, 
+                        remove_selected_columns = TRUE)
+```
+
+```{r}
+# Tamaño del dataset
+dim(adult_OHE)
+```
+
+```{r}
+# Eliminar data set anterior
+rm(adult)
+```
+
+# Particion de datos
+
+```{r}
+# La respuesta es la columna 7 de adult_OHE
+data <- adult_OHE[, -7]
+
+# Respuesta
+Y <- ifelse(adult_OHE$Ingreso == ">50K", 1, 0)
+
+# Dividir en entrenamiento (70%), validación (20%) y prueba (10%)
+
+set.seed(1)  # Para reproducibilidad
+n <- nrow(data)
+train_idx <- sample(n, size = floor(0.7 * n))
+val_idx   <- sample(setdiff(seq(n), train_idx), size = floor(0.2 * n))
+test_idx  <- setdiff(seq(n), c(train_idx, val_idx))
+```
+
+```{r}
+# Media y desviacion estandar de entrenamiento
+train_mean <- colMeans(data[train_idx, ])
+train_sd   <- apply(data[train_idx, ], 2, sd)
+
+# Aplicamos a los tres sets
+train_scaled <- scale(data[train_idx, ], center = train_mean, scale = train_sd)
+val_scaled   <- scale(data[val_idx,   ], center = train_mean, scale = train_sd)
+test_scaled  <- scale(data[test_idx,  ], center = train_mean, scale = train_sd)
+
+# Respuesta
+y_train <- Y[train_idx]
+y_val   <- Y[val_idx]
+y_test  <- Y[test_idx]
+
+# Eliminar adult_OHE
+rm(adult_OHE)
+```
+
+# Modelo MLP
+
+```{r, warning=FALSE, message=FALSE}
+library(keras3)
+library(ggplot2)
+
+# Modelo
+
+model <- keras_model_sequential() %>%
+  layer_dense(units = 64, activation = 'relu', 
+              input_shape = c(ncol(train_scaled))) %>%
+  
+  layer_dense(units = 32, activation = 'relu',
+              kernel_regularizer = regularizer_l2(0.01)) %>% # Ridge
+  
+  layer_dense(units = 1, activation = 'sigmoid')
+```
+
+```{r}
+# Compilación 
+
+model %>% compile(
+  optimizer = optimizer_adam(learning_rate = 0.001),
+  loss = 'binary_crossentropy',
+  metrics = list(metric_auc(), metric_binary_accuracy())
+  )
+```
+
+```{r}
+# Entrenamiento del modelo
+
+history <- model %>% fit(
+  x = as.matrix(train_scaled),
+  y = y_train,
+  epochs = 100,
+  batch_size = 128,
+  validation_data = list(as.matrix(val_scaled), y_val),
+  callbacks = list(
+    callback_early_stopping(monitor = "val_loss", patience = 30, 
+                            restore_best_weights = TRUE)),
+  verbose = 0 # No mostrar progreso
+)
+```
+
+```{r}
+# Grafico de metricas por epochs
+plot(history)
+```
+
+```{r}
+# Test
+evaluation <- model %>% evaluate(as.matrix(test_scaled), y_test, verbose = 2)
+```
+
+## Matriz de confusión
+
+```{r}
+# Matriz de confusion
+probs_MLP <- model %>% predict(as.matrix(test_scaled))
+
+# Si la probabilidad es mayor a 0.5 es un 1 (gana >50k), si no, un 0
+predicts_MLP <- ifelse(probs_MLP > 0.5, 1, 0)
+
+MC_MLP <- table(Real = y_test, Predicho = predicts_MLP)
+
+# Mostrar matriz de confusion
+MC_MLP
+```
+
+# Modelo GLM
+
+```{r}
+library(glmtoolbox)
+
+# Y_i (ind.) ~ Bernoulli(mu_i)
+# logit(mu_i) = B0 + B1*X1 + B2*X2 + ...
+
+# logit(x) = log(x/(1-x))
+```
+
+```{r}
+# Datos
+adult <- read_csv("adult.csv", show_col_types = FALSE)
+
+# Nombres de las columnas
+colnames(adult) <- c("age", "workclass", "fnlwgt", "education", "education_num", 
+                     "marital_status", "occupation", "relationship", "race",
+                     "sex", "capital_gain", "capital_loss", "hours_per_week", 
+                     "native_country", "Ingreso")
+
+# Tamaño del dataset
+dim(adult)
+```
+
+```{r}
+# Respuesta
+adult$Ingreso <- ifelse(adult$Ingreso == ">50K", 1, 0)
+
+# Variables categoricas
+categoricas <- c("workclass", "education", "marital_status", "occupation", 
+                 "relationship", "race", "sex", "native_country", "Ingreso")
+
+# Convertir a factor
+adult[categoricas] <- lapply(adult[categoricas], as.factor)
+
+# Revisar que las categoricas esten como 'Factor'
+str(adult, give.attr = F)
+```
+
+```{r}
+# Respuesta
+table(adult$Ingreso)
+```
+
+## Partición de datos
+
+```{r}
+# Dividir en entrenamiento (70%), validación (20%) y prueba (10%)
+
+set.seed(1)  # Para reproducibilidad
+n <- nrow(adult)
+train_idx <- sample(n, size = floor(0.7 * n))
+val_idx   <- sample(setdiff(seq(n), train_idx), size = floor(0.2 * n))
+test_idx  <- setdiff(seq(n), c(train_idx, val_idx))
+
+
+# Datos de entrenamiento, validación y prueba
+train <- adult[train_idx, ]
+val   <- adult[val_idx, ]
+test  <- adult[test_idx, ]
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+# Modelo con datos de entrenamiento
+
+model_glm <- glm(Ingreso ~ age + workclass + fnlwgt + education + race + 
+                   occupation + relationship + marital_status + sex + 
+                   capital_gain + capital_loss + hours_per_week + native_country, 
+                 
+                 data = train, family = binomial(logit))
+```
+
+## Selección de variables
+
+```{r, warning=FALSE, message=FALSE}
+# Seleccion de variables
+# (AIC recomienda dejarlas todas)
+
+library(MASS)
+model_step <- stepAIC(model_glm, direction = "backward")
+```
+
+```{r}
+# Resumen del modelo
+library(knitr)
+
+coef_table <- as.data.frame(summary(model_glm)$coefficients)
+
+kable(coef_table, digits = 4, caption = "Resumen del modelo GLM")
+```
+
+## Evaluar mejor umbral
+
+```{r}
+# Predecir probabilidades en validación
+val_probs <- predict(model_glm, newdata = val, type = "response")
+
+# Tunear el threshold en validación: probar una grilla y minimizar tasa de error
+thresholds  <- seq(0.1, 0.9, by = 0.05)
+error_rates <- numeric(length(thresholds))
+
+for (i in 1:length(thresholds)) {
+  thresh <- thresholds[i]
+  val_pred <- ifelse(val_probs > thresh, 1, 0)
+  error_rate <- mean(val_pred != val$Ingreso) # Tasa de error 
+  error_rates[i] <- error_rate
+}
+
+# Encontrar el mejor threshold
+best_thresh <- thresholds[which.min(error_rates)]
+cat("Mejor threshold encontrado en validación:", best_thresh, "\n")
+cat("Accuracy en validación:", 1-min(error_rates), "\n")
+```
+## Matriz de confusión
+
+```{r}
+# Evaluar en prueba con el mejor threshold
+test_probs <- predict(model_glm, newdata = test, type = "response")
+test_pred  <- ifelse(test_probs > best_thresh, 1, 0)
+test_pred  <- factor(test_pred, levels = c(0, 1))
+
+# Matriz de confusión
+MC_glm <- table(test$Ingreso, test_pred)
+MC_glm
+```
+
+
+```{r}
+# Accuracy
+round(mean(test_pred == test$Ingreso), 3)
+```
+# Comparación de modelos MLP y GLM
+
+```{r, message=FALSE, warning=FALSE}
+# Comparacion MLP y GLM por curva ROC
+
+library(pROC)
+roc_glm <- roc(test$Ingreso, test_probs)
+roc_mlp <- roc(test$Ingreso, probs_MLP)
+
+auc_glm <- auc(roc_glm)
+auc_mlp <- auc(roc_mlp)
+
+# Curva ROC GLM
+plot(roc_glm, col = "red", lwd = 2,
+     main = "Comparación de Curvas ROC: GLM vs. MLP")
+
+# Curva ROC MLP
+plot(roc_mlp, col = "blue", lwd = 2, add = TRUE)
+
+legend("bottomright", 
+       legend = c(paste("GLM ( AUC =", round(auc_glm, 4),")"), 
+                  paste("MLP ( AUC =", round(auc_mlp, 4),")")), 
+       col = c("red", "blue"), lwd = 2)
+```
+
