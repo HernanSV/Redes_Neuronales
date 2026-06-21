@@ -31,6 +31,20 @@ knitr::opts_chunk$set(echo = TRUE)
 setwd("C:\\Users\\herna\\OneDrive\\Escritorio\\Maestria\\Redes Neuronales\\Proyecto")
 ```
 
+# Introducción
+
+Los modelos estadísticos tradicionales, como  los Modelos Lineales Generalizados ($\textbf{GLM}$) y los Modelos Aditivos Generalizados ($\textbf{GAM}$), permiten analizar el efecto de cada variable sobre la respuesta, pero no pueden representar patrones complejos en los datos, lo que limita su desempeño predictivo frente a modelos más sofisticados.
+
+Por otro lado, los modelos como las redes neuronales multicapa ($\textbf{MLP}$) pueden capturar relaciones complejas entre las variables y alcanzar una alta capacidad predictiva; sin embargo, es difícil interpretar cómo las variables de entrada influyen en las decisiones del modelo. Hasta hace poco surgieron propuestas como la de los Modelos Aditivos Neuronales ($\textbf{NAM}$), los cuales incorporan la capacidad de aprendizaje de las redes neuronales dentro de una estructura aditiva que facilita la interpretación de los efectos de las variables.
+
+En el presente trabajo (disponible en https://github.com/HernanSV/Redes_Neuronales) se comparan los modelos $\textbf{GLM}$, $\textbf{GAM}$, $\textbf{MLP}$ y $\textbf{NAM}$ en un caso de clasificación binaria, la intención es analizar tanto su capacidad predictiva como su interpretabilidad.
+
+# Trabajo relacionado
+
+En el artículo de Doohan, Kook, y Burke (2026) se compara el desempeño de los $\textbf{GAM}$ y las redes neuronales en problemas reales de modelado predictivo sobre una gran cantidad de datos tabulares y concluyen que las $\textbf{MLP}$ tienden a obtener mejores resultados cuando el tamaño de muestra es grande y hay gran cantidad de variables predictoras, pero no existe evidencia suficiente para afirmar que las redes neuronales son superiores a los $\textbf{GAM}$ en datos tabulares reales.
+
+Si bien el trabajo resalta la interpretabilidad de los $\textbf{GAM}$ cuando las diferencias predictivas son pequeñas (lo que puede inclinar la balanza a su favor), no se realiza una mirada a los modelos $\textbf{NAM}$.
+
 # Datos y objetivos
 
 Los datos tomados de <https://www.kaggle.com/datasets/wenruliu/adult-income-dataset> contienen información acerca de los ingresos anuales de una persona (1: mayores a 50K anuales, 0: menores o iguales a 50K) y también información referente a su *edad*, *género*, *nivel educativo*, *educación*, etc.
@@ -128,6 +142,8 @@ rm(adult)
 
 # Particion de datos
 
+Para el ajuste de los modelos, calibración de hiperparámetros y evaluación del área bajo la curva ROC (AUC) y *Accuracy*, se dividió el conjunto de datos en **entrenamiento** (60\%), **validación** (20\%) y **prueba** (20\%).
+
 ```{r}
 # La respuesta es la columna 'Ingreso' de adult_OHE
 data <- adult_OHE[, !(names(adult_OHE) %in% "Ingreso")]
@@ -177,6 +193,46 @@ rm(adult_OHE)
 ```
 
 # Modelo MLP
+
+Se ajustó una red neuronal multicapa ($\textbf{MLP}$) para la clasificación binaria. Para la exploración de hiperparámetros se recurrió a una grilla y se fijaron los valores que maximizaron el área bajo la curva ROC (AUC) en el conjunto de datos de validación. Esta es la configuración del modelo:
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library(knitr)
+
+tabla_mlp <- data.frame(
+  Parámetro = c(
+    "Capas ocultas",
+    "Neuronas por capa",
+    "Activación capas ocultas",
+    "Activación salida",
+    "Regularización",
+    "Optimizador",
+    "Tasa de aprendizaje",
+    "Tamaño de lote",
+    "Máximo de épocas",
+    "Parada temprana"
+  ),
+  Valor = c(
+    "2",
+    "128, 64",
+    "ReLU",
+    "Sigmoide",
+    "$\\lambda_{L_2}=0.001$",
+    "Adam",
+    "0.001",
+    "64",
+    "70",
+    "Paciencia = 20"
+  )
+)
+
+kable(
+  tabla_mlp,
+  caption = "Configuración de la red neuronal multicapa (MLP).",
+  align = c("l", "r")
+)
+```
+
 
 ## Exploración de hiperparámetros
 
@@ -530,14 +586,34 @@ MC_MLP
 
 ```{r}
 # Accuracy
-test_pred_GAM  <- factor(predicts_MLP, levels = c(0, 1))
-
 acc_mlp <- round(mean(predicts_MLP == y_test), 4)
 acc_mlp
 ```
 
 
 # Modelo GLM
+
+Se ajustó un Modelo Lineal Generalizado ($\textbf{GLM}$) para respuesta binaria, asumiendo que la variable de interés sigue una distribución Bernoulli. Sea $Y_i$ la respuesta observada para el individuo $i$, entonces
+
+$$
+Y_i \overset{\text{ind.}}{\sim} \textsf{Bernoulli}(\mu_i), \quad \text{donde} \quad \mu_i = \mathbb{P}(Y_i = 1),
+$$
+
+$$
+\text{logit}(\mu_i) = \log\left(\frac{\mu_i}{1-\mu_i}\right)
+=
+\beta_0
++
+\beta_1 x_{i1}
++
+\beta_2 x_{i2}
++
+\cdots
++
+\beta_p x_{ip},
+$$
+
+donde $\beta_0$ corresponde al intercepto, $\beta_1,\ldots,\beta_p$ son los coeficientes asociados a las variables explicativas y $X_{ij}$ representa el valor de la variable $j$ para la observación $i$.
 
 ```{r}
 library(glmtoolbox)
@@ -672,6 +748,23 @@ acc_glm
 ```
 
 # Modelo GAM
+
+Se ajustó el modelo $\textbf{GAM}$ utilizando la librería $\texttt{mgcv}$ en R. En particular, se consideró un modelo con respuesta binaria y función de enlace $\textsf{logit}$. Las variables continuas se modelaron mediante funciones suaves $s(\cdot)$ (splines penalizados), mientras que las variables categóricas se incluyeron de forma paramétrica.
+
+El modelo ajustado tiene la forma:
+
+$$
+Y_i \overset{\text{ind.}}{\sim} \textsf{Bernoulli}(\mu_i), \quad \text{donde} \quad \mu_i = \mathbb{P}(Y_i = 1),
+$$
+
+$$
+\text{logit}(\mu)
+= \beta_0 + s_1(x_1) + s_2(x_2) + ... + s_m(x_m)
++ \mathbf{z}^\top \boldsymbol{\beta},
+$$
+
+donde $s_j(\cdot)$ son funciones suaves estimadas a partir de los datos y $\mathbf{z}$ representa el vector de variables categóricas incluidas en el modelo.
+
 
 ## Procesamiento de los datos
 
@@ -846,9 +939,19 @@ plot(model_gam,
 
 # Modelo NAM
 
-El modelo **Modelo Aditivo Neuronal (NAM)** se encuentra implementado en **Python** con la librería `dnamite`. Esta librería permite realizar la selección de variables. Para el ajuste del modelo se utilizará **Google Colab**.
+*Nota*: Para el ajuste del modelo se utilizará **Google Colab**. La implementación del modelo **NAM** está en el archivo **Nam_colab** disponible en este [enlace](https://github.com/HernanSV/Redes_Neuronales/)
 
-Para ver la implementación del modelo NAM puede dirigirse a este [enlace](https://github.com/HernanSV/Redes_Neuronales/) y abrir el archivo **Nam_colab**.
+El modelo **Modelo Aditivo Neuronal (NAM)** introducido en Agarwal y cols. (2021) e implementado en **Python** con ayuda del paquete `dnamite`, es una extensión de los modelos **GAM** que utiliza redes neuronales para modelar relaciones no lienales entre cada variable predictora y la respuesta. El modelo es:
+
+$$
+\text{logit}(\mu)
+= \beta_0 + f_1(x_1) + f_2(x_2) + ... + f_p(x_p), \quad \text{donde} \quad \mu = \mathbb{P}(Y=1)
+$$
+<center>
+![](NAM_arch.png){height=300}
+</center>
+
+*Arquitectura NAM para clasificación binaria*
 
 ```{r, eval=FALSE}
 # Exportar indices para particion de datos para el modelo NAM
@@ -910,7 +1013,51 @@ legend("bottomright",
        col = c("red", "orange2", "blue" ,"seagreen4"), lwd = 2)
 ```
 
-# Comparación de modelos
+# Resultados
+
+## Selección de variables
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+library(knitr)
+
+variables_modelos <- data.frame(
+  Variable = c(
+    "age", "fnlwgt", "education_num", "capital_gain",
+    "capital_loss", "hours_per_week", "workclass",
+    "education", "marital_status", "sex",
+    "relationship", "race", "occupation", "native_country"
+  ),
+  Tipo = c(
+    rep("Continua", 6),
+    rep("Categórica", 8)
+  ),
+  MLP = c(
+    "Sí","Sí","Sí","Sí","Sí","Sí",
+    "Sí","Sí","Sí","Sí","Sí","Sí","Sí","Sí"
+  ),
+  GLM = c(
+    "Sí","Sí","No","Sí","Sí","Sí",
+    "Sí","Sí","Sí","Sí","Sí","Sí","Sí","Sí"
+  ),
+  GAM = c(
+    "Sí","Sí","No","Sí","Sí","Sí",
+    "No","Sí","Sí","Sí","Sí","Sí","Sí","Sí"
+  ),
+  NAM = c(
+    "Sí","No","Sí","Sí","Sí","Sí",
+    "No","No","No","No","Sí","No","Sí","No"
+  )
+)
+
+kable(
+  variables_modelos,
+  caption = "Selección de variables por modelo",
+  align = c("l","l","c","c","c","c")
+)
+```
+
+
+## Comparación de modelos
 
 ```{r, warning=FALSE, message=FALSE, echo=FALSE}
 library(knitr)
@@ -941,4 +1088,21 @@ kable(tabla_modelos,
   
   row_spec(4, bold = TRUE, background = "darkseagreen2")
 ```
+
+# Conclusiones
+
+- De acuerdo a los resultados obtenidos con la muestra $\textit{test}$ del conjunto de datos de interés, los modelos neuronales muestran un mejor desempeño predictivo que los modelos estadísticos tradicionales.
+    
+- Los modelos $\textbf{GLM}$ y $\textbf{GAM}$ tuvieron menor rendimiento predictivo, pero ofrecen mayor claridad en la interpretación y son eficientes computacionalmente.
+
+- El $\textbf{NAM}$ se destaca en ambos apartados, pues logra el mejor desempeño en AUC y $\textit{accuracy}$, y además mantiene una estructura aditiva interpretable. También es el modelo más parsimonioso, pues usó el subconjunto más pequeño de variables. Quizá su parsimonia explique el porqué de su mejora en la generalización con respecto a los otros modelos ajustados.
+
+Dado que las diferencias de desempeño no son muy amplias, la elección del modelo también debe considerar interpretabilidad y complejidad, no solo precisión. 
+
+
+# Referencias
+
+- Agarwal, R., Melnick, L., Frosst, N., Zhang, X., Lengerich, B., Caruana, R., y Hinton, G. (2021). **Neural additive models: Interpretable machine learning with neural nets**. Descargado de https://arxiv.org/abs/2004.13912
+
+- Doohan, J., Kook, L., y Burke, K. (2026). **Comparison of generalised additive models and neural networks in applications: A systematic review**. Descargado de https://arxiv.org/abs/2510.24601
 
